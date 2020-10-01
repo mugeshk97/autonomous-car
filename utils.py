@@ -63,26 +63,18 @@ def augmenter(center, left, right, steering_angle, range_x=100, range_y=10):
 def batch_generator(image_paths, steering_angles, batch_size, is_training):
     images = np.empty([batch_size, 66, 200, 3])
     steers = np.empty(batch_size)
-
     while True:
         i = 0
-
         for index in np.random.permutation(image_paths.shape[0]):
-
             center, left, right = image_paths[index]
             steering_angle = steering_angles[index]
-
             if is_training and np.random.rand() < 0.6:
                 image, steering_angle = augmenter(center, left, right, steering_angle)
-
             else:
                 image = load_image(center)
-
             images[i] = pre_process(image)
             steers[i] = steering_angle
-
             i += 1
             if i == batch_size:
                 break
-
         yield images, steers
