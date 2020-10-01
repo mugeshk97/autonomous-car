@@ -40,7 +40,7 @@ def createModel():
     return net
 
 
-checkpoint = tf.keras.callbacks.ModelCheckpoint('model-{epoch:03d}.h5',
+checkpoint = tf.keras.callbacks.ModelCheckpoint('model-{epoch:02d}.h5',
                                                 monitor='val_loss',
                                                 verbose=0,
                                                 save_best_only=True,
