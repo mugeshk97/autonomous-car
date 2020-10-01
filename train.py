@@ -1,104 +1,56 @@
-import cv2
-import numpy as np
 import pandas as pd
-import random
-import matplotlib.pyplot as plt
-from imgaug import augmenters
+import tensorflow as tf
 from sklearn.model_selection import train_test_split
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Convolution2D, Flatten, Dense
-from tensorflow.keras.optimizers import Adam
 
-data_file = pd.read_csv('data.csv')
+from utils import batch_generator
 
+physical_devices = tf.config.experimental.list_physical_devices('GPU')
+tf.config.experimental.set_memory_growth(physical_devices[0], True)
 
-def loadData(data):
-    imagesPath = []
-    steering = []
-    for i in range(len(data)):
-        indexed_data = data.iloc[i]
-        imagesPath.append(f'data/IMG/{indexed_data[0]}')
-        steering.append(float(indexed_data[3]))
-    steering = np.asarray(steering)
-    return imagesPath, steering
+data_df = pd.read_csv('data/driving_log.csv',
+                      names=['center', 'left', 'right', 'steering', 'throttle', 'reverse', 'speed'])
 
+data_df['center'] = data_df['center'].apply(lambda x: 'data/IMG/' + x.split('\\')[-1])
+data_df['left'] = data_df['left'].apply(lambda x: 'data/IMG/' + x.split('\\')[-1])
+data_df['right'] = data_df['right'].apply(lambda x: 'data/IMG/' + x.split('\\')[-1])
 
-print('Loading the Data')
-imgPath, Steering = loadData(data_file)
+X = data_df[['center', 'left', 'right']].values
+y = data_df['steering'].values
 
-xtrain, xval, ytrain, yval = train_test_split(imgPath, Steering, test_size=0.2)
-
-
-def augmentImage(imgPath, steering):
-    img = plt.imread(imgPath)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    if np.random.rand() < 0.5:
-        pan = augmenters.Affine(translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)})
-        img = pan.augment_image(img)
-    if np.random.rand() < 0.5:
-        zoom = augmenters.Affine(scale=(1, 1.2))
-        img = zoom.augment_image(img)
-    if np.random.rand() < 0.5:
-        brightness = augmenters.Multiply((0.2, 1.2))
-        img = brightness.augment_image(img)
-    if np.random.rand() < 0.5:
-        img = cv2.flip(img, 1)
-        steering = -steering
-    return img, steering
-
-
-def preProcess(img):
-    img = img[60:135, :, :]
-    img = cv2.cvtColor(img, cv2.COLOR_RGB2YUV)
-    img = cv2.GaussianBlur(img, (3, 3), 0)
-    img = cv2.resize(img, (200, 66))
-    img = img / 255
-    return img
-
-
-def batchGen(imagesPath, steeringList, batchSize, trainFlag):
-    while True:
-        imgBatch = []
-        steeringBatch = []
-        for i in range(batchSize):
-            index = random.randint(0, len(imagesPath) - 1)
-            if trainFlag:
-                img, steering = augmentImage(imagesPath[index], steeringList[index])
-            else:
-                img = cv2.imread(imagesPath[index])
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                steering = steeringList[index]
-            img = preProcess(img)
-            imgBatch.append(img)
-            steeringBatch.append(steering)
-        yield np.asarray(imgBatch), np.asarray(steeringBatch)
+X_train, X_valid, y_train, y_valid = train_test_split(X, y, test_size=0.2, random_state=0)
 
 
 def createModel():
-    model = Sequential()
+    net = tf.keras.modelsSequential()
 
-    model.add(Convolution2D(24, (5, 5), (2, 2), input_shape=(66, 200, 3), activation='elu'))
-    model.add(Convolution2D(36, (5, 5), (2, 2), activation='elu'))
-    model.add(Convolution2D(48, (5, 5), (2, 2), activation='elu'))
-    model.add(Convolution2D(64, (3, 3), activation='elu'))
-    model.add(Convolution2D(64, (3, 3), activation='elu'))
+    net.add(tf.keras.layers.Lambda(lambda x: x / 127.5 - 1.0, input_shape=(66, 200, 3)))
+    net.add(tf.keras.layers.Conv2D(24, (5, 5), (2, 2), activation='elu'))
+    net.add(tf.keras.layers.Conv2D(36, (5, 5), (2, 2), activation='elu'))
+    net.add(tf.keras.layers.Conv2D(48, (5, 5), (2, 2), activation='elu'))
+    net.add(tf.keras.layers.Conv2D(64, (3, 3), activation='elu'))
+    net.add(tf.keras.layers.Conv2D(64, (3, 3), activation='elu'))
 
-    model.add(Flatten())
-    model.add(Dense(100, activation='elu'))
-    model.add(Dense(50, activation='elu'))
-    model.add(Dense(10, activation='elu'))
-    model.add(Dense(1))
+    net.add(tf.keras.layers.Flatten())
+    net.add(tf.keras.layers.Dense(100, activation='elu'))
+    net.add(tf.keras.layers.Dense(50, activation='elu'))
+    net.add(tf.keras.layers.Dense(10, activation='elu'))
+    net.add(tf.keras.layers.Dense(1, activation='tanh'))
 
-    model.compile(Adam(lr=0.0001), loss='mse')
-    return model
+    net.compile(tf.keras.optimizers.Adam(lr=1.0e-4), loss='mse')
+    return net
 
+
+checkpoint = tf.keras.callbacks.ModelCheckpoint('model-{epoch:03d}.h5',
+                                                monitor='val_loss',
+                                                verbose=0,
+                                                save_best_only=True,
+                                                mode='auto')
 
 model = createModel()
-model.summary()
-
-model.fit(batchGen(xtrain, ytrain, 100, 1),
-          steps_per_epoch=100,
-          validation_data=batchGen(xval, yval, 100, 0),
-          validation_steps=100, epochs=10)
-print('Model Saved')
-model.save('model.h5')
+model.fit_generator(batch_generator(X_train, y_train, 40, True),
+                    steps_per_epoch=2000,
+                    validation_data=batch_generator(X_valid, y_valid, 40, False),
+                    validation_steps=10,
+                    epochs=50,
+                    callbacks=[checkpoint]
+                    )
